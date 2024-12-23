@@ -190,5 +190,4 @@ kubectl logs <POD_NAME>
 
 ---
 
-## Author
-Created by [Your Name], showcasing CI/CD deployment on AWS EKS using Jenkins.
+Happy Deploying!
