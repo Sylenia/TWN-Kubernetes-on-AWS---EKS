@@ -213,4 +213,235 @@ To integrate Jenkins with GitHub:
 
 ---
 
+
+
+# Demo Project: Complete CI/CD Pipeline with EKS and AWS ECR
+
+## Overview
+This project demonstrates a complete CI/CD pipeline for a Java Maven application. The pipeline automates the process of building, containerizing, and deploying an application to an AWS EKS cluster using a private AWS Elastic Container Registry (ECR). It includes steps for versioning, artifact creation, Docker image management, deployment to Kubernetes, and version tracking in Git.
+
+## Technologies Used
+- **Kubernetes**
+- **Jenkins**
+- **AWS EKS**
+- **AWS ECR** (Private Registry)
+- **Java**
+- **Maven**
+- **Linux**
+- **Docker**
+- **Git**
+
+---
+
+## Prerequisites
+
+1. **AWS Account:** Access to an AWS account with permissions to manage EKS, ECR, and IAM roles.
+2. **Jenkins Server:** A running Jenkins instance with Docker and required plugins.
+3. **GitHub or GitLab Repository:** Repository for managing source code and CI/CD configurations.
+4. **AWS CLI:** Installed and configured for accessing AWS resources.
+5. **kubectl:** Kubernetes command-line tool installed and configured.
+6. **Kubernetes Cluster:** AWS EKS cluster set up and accessible.
+
+---
+
+## Project Steps
+
+### 1. CI/CD Pipeline Configuration
+
+#### Jenkinsfile
+The following Jenkinsfile defines the complete CI/CD pipeline:
+
+```groovy
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    tools {
+        maven 'Maven'
+    }
+    environment {
+        AWS_REGION = 'us-east-1'
+        ECR_REPO_NAME = 'java-maven-app'
+        ECR_URI = "<AWS_ACCOUNT_ID>.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+    }
+    stages {
+        stage('Increment Version') {
+            steps {
+                script {
+                    echo 'Incrementing app version...'
+                    sh 'mvn build-helper:parse-version versions:set \
+                        -DnewVersion=\${parsedVersion.majorVersion}.\${parsedVersion.minorVersion}.\${parsedVersion.nextIncrementalVersion} \
+                        versions:commit'
+                    def matcher = readFile('pom.xml') =~ '<version>(.+)</version>'
+                    def version = matcher[0][1]
+                    env.IMAGE_NAME = "$version-$BUILD_NUMBER"
+                }
+            }
+        }
+
+        stage('Build App') {
+            steps {
+                script {
+                    echo 'Building the application...'
+                    sh 'mvn clean package'
+                }
+            }
+        }
+
+        stage('Build and Push Docker Image') {
+            steps {
+                script {
+                    echo 'Building and pushing Docker image to AWS ECR...'
+                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-credentials', passwordVariable: 'AWS_SECRET_ACCESS_KEY', usernameVariable: 'AWS_ACCESS_KEY_ID')]) {
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}"
+                        sh "docker build -t ${ECR_REPO_NAME}:${IMAGE_NAME} ."
+                        sh "docker tag ${ECR_REPO_NAME}:${IMAGE_NAME} ${ECR_URI}:${IMAGE_NAME}"
+                        sh "docker push ${ECR_URI}:${IMAGE_NAME}"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            environment {
+                APP_NAME = 'java-maven-app'
+            }
+            steps {
+                script {
+                    echo 'Deploying to EKS...'
+                    sh 'envsubst < kubernetes/deployment.yaml | kubectl apply -f -'
+                    sh 'envsubst < kubernetes/service.yaml | kubectl apply -f -'
+                }
+            }
+        }
+
+        stage('Commit Version Update') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+                        sh "git remote set-url origin https://${USER}:${PASS}@<your-github-repository>"
+                        sh 'git add .'
+                        sh 'git commit -m "ci: version bump"'
+                        sh 'git push origin HEAD:main'
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### Explanation of Jenkinsfile:
+
+1. **Increment Version:**
+   - Automatically increments the application version using Maven's build-helper plugin.
+
+2. **Build App:**
+   - Compiles and packages the Java Maven application.
+
+3. **Build and Push Docker Image:**
+   - Builds the Docker image for the application.
+   - Logs into AWS ECR using credentials.
+   - Tags and pushes the image to the private AWS ECR repository.
+
+4. **Deploy to EKS:**
+   - Substitutes variables in Kubernetes manifest files and applies them to the EKS cluster.
+
+5. **Commit Version Update:**
+   - Updates the repository with the new version number and pushes changes to GitHub.
+
+---
+
+### 2. AWS ECR Configuration
+
+1. **Create AWS ECR Repository:**
+   ```bash
+   aws ecr create-repository --repository-name java-maven-app --region us-east-1
+   ```
+
+2. **Authenticate Docker with ECR:**
+   ```bash
+   aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+   ```
+
+---
+
+### 3. Kubernetes Manifest Files
+
+#### Deployment Configuration (`deployment.yaml`):
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $APP_NAME
+  labels:
+    app: $APP_NAME
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: $APP_NAME
+  template:
+    metadata:
+      labels:
+        app: $APP_NAME
+    spec:
+      imagePullSecrets:
+        - name: aws-registry-key
+      containers:
+        - name: $APP_NAME
+          image: $ECR_URI:$IMAGE_NAME
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+```
+
+#### Service Configuration (`service.yaml`):
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: $APP_NAME
+spec:
+  selector:
+    app: $APP_NAME
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+```
+
+### Best Practices for Kubernetes Configuration:
+- Use `imagePullSecrets` to authenticate private registries.
+- Always specify resource requests and limits in the deployment.
+- Use descriptive labels for easy management.
+
+---
+
+### GitHub Integration
+To integrate Jenkins with GitHub:
+
+1. **Add GitHub Credentials:**
+   - Navigate to Jenkins Dashboard > Manage Jenkins > Manage Credentials.
+   - Add GitHub credentials as a username/password pair.
+
+2. **Update Jenkinsfile:**
+   - Replace `<your-github-repository>` with the URL of your GitHub repository.
+
+3. **Webhook Configuration:**
+   - Set up a webhook in your GitHub repository to trigger Jenkins builds on push events.
+
+---
+
+## Additional Resources
+- [Jenkins Pipeline Syntax](https://www.jenkins.io/doc/book/pipeline/syntax/)
+- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [AWS EKS Guide](https://docs.aws.amazon.com/eks/)
+- [AWS ECR Documentation](https://docs.aws.amazon.com/AmazonECR/)
+- [GitHub Webhooks](https://docs.github.com/en/developers/webhooks-and-events/webhooks/creating-webhooks)
+
+---
+
 Happy Deploying!
