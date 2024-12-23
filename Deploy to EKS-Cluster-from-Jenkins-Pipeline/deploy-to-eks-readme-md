@@ -1,0 +1,194 @@
+# Demo Project: CD - Deploy to EKS Cluster from Jenkins Pipeline
+
+## Overview
+This project demonstrates deploying a Maven application to an AWS EKS (Elastic Kubernetes Service) cluster using a Jenkins pipeline. The steps include installing necessary tools on the Jenkins server, configuring authentication and cluster access, and adjusting the Jenkinsfile to enable deployment.
+
+## Technologies Used
+- Kubernetes
+- Jenkins
+- AWS EKS
+- Docker
+- Linux
+
+---
+
+## Prerequisites
+
+1. **AWS Account:** Ensure you have an AWS account with permissions to create and manage EKS clusters.
+2. **Jenkins Server:** A running Jenkins instance with Docker installed.
+3. **IAM Role or User:** Set up IAM roles or users with permissions for EKS and other required AWS services.
+4. **Maven App:** A Maven-based application ready for deployment.
+
+---
+
+## Project Steps
+
+### 1. Install `kubectl` Command Line Tool
+
+Run the following commands inside the Jenkins container as the root user to install `kubectl`:
+
+```bash
+curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+chmod +x ./kubectl
+mv ./kubectl /usr/local/bin/kubectl
+```
+
+#### Best Practices:
+- Verify installation by running: `kubectl version --client`
+- Keep `kubectl` updated to match the Kubernetes server version.
+
+---
+
+### 2. Install AWS IAM Authenticator Tool
+
+Install the AWS IAM Authenticator tool to enable authentication with AWS EKS:
+
+```bash
+curl -Lo aws-iam-authenticator https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/download/v0.6.11/aws-iam-authenticator_0.6.11_linux_amd64
+chmod +x ./aws-iam-authenticator
+mv ./aws-iam-authenticator /usr/local/bin
+```
+
+#### Verify Installation:
+```bash
+aws-iam-authenticator help
+```
+
+---
+
+### 3. Create a `kubeconfig` File for EKS
+
+Generate a `kubeconfig` file to connect to the EKS cluster and place it in the Jenkins home directory:
+
+1. Use the following AWS CLI command:
+   ```bash
+   aws eks update-kubeconfig --region <AWS_REGION> --name <EKS_CLUSTER_NAME>
+   ```
+2. Verify connection to the cluster:
+   ```bash
+   kubectl get nodes
+   ```
+
+#### Best Practices:
+- Store the `kubeconfig` file in a secure location.
+- Use an IAM role for authentication for enhanced security.
+
+---
+
+### 4. Add AWS Credentials to Jenkins
+
+To enable Jenkins to interact with AWS:
+
+1. **Create an IAM Role:** As a best practice, create a dedicated IAM role for Jenkins with permissions for EKS and related services.
+   - Example policies: `AmazonEKSClusterPolicy`, `AmazonEC2ContainerRegistryFullAccess`
+
+2. **Add AWS Credentials:**
+   - Navigate to Jenkins Dashboard > Manage Jenkins > Manage Credentials.
+   - Add the AWS credentials (Access Key ID and Secret Access Key) to Jenkins.
+
+#### Best Practices:
+- Use AWS Secrets Manager for storing sensitive information securely.
+- Rotate credentials regularly.
+
+---
+
+### 5. Adjust Jenkinsfile for EKS Deployment
+
+Update your Jenkinsfile to include steps for deploying to the EKS cluster. Below is an example Jenkinsfile:
+
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'us-east-1'
+        EKS_CLUSTER_NAME = 'my-eks-cluster'
+        AWS_CREDENTIALS_ID = 'aws-credentials-id' // Replace with your Jenkins AWS credentials ID
+        KUBECONFIG_PATH = '/var/jenkins_home/.kube/config'
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'mvn clean install'
+            }
+        }
+
+        stage('Docker Build & Push') {
+            environment {
+                DOCKER_IMAGE = 'my-maven-app:latest'
+            }
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: AWS_CREDENTIALS_ID]]) {
+                    sh 'docker build -t $DOCKER_IMAGE .'
+                    sh 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin <YOUR_ECR_REPO>'
+                    sh 'docker tag $DOCKER_IMAGE <YOUR_ECR_REPO>/my-maven-app:latest'
+                    sh 'docker push <YOUR_ECR_REPO>/my-maven-app:latest'
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: AWS_CREDENTIALS_ID]]) {
+                    sh 'kubectl --kubeconfig=$KUBECONFIG_PATH apply -f k8s/deployment.yaml'
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
+```
+
+#### Best Practices:
+- Use Docker multi-stage builds to optimize image size.
+- Define resource limits in your Kubernetes manifests for better cluster management.
+
+---
+
+## Useful Commands
+
+### Verify Cluster Connection
+```bash
+kubectl cluster-info
+```
+
+### Check Jenkins Logs
+```bash
+sudo docker logs jenkins
+```
+
+### Test AWS CLI Connection
+```bash
+aws sts get-caller-identity
+```
+
+### Manage Kubernetes Resources
+```bash
+kubectl get all
+kubectl describe pod <POD_NAME>
+kubectl logs <POD_NAME>
+```
+
+---
+
+## Additional Resources
+- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [AWS EKS Guide](https://docs.aws.amazon.com/eks/)
+- [Jenkins Pipeline Syntax](https://www.jenkins.io/doc/book/pipeline/syntax/)
+
+---
+
+## Author
+Created by [Your Name], showcasing CI/CD deployment on AWS EKS using Jenkins.

@@ -143,3 +143,5 @@ kubectl scale deployment nginx-deployment --replicas=5
 - **Version Control**: Always pin Kubernetes and AWS CLI versions to ensure compatibility.
 
 ---
+
+Happy Deploying! 
